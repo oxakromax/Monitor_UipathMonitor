@@ -31,14 +31,12 @@ func pingAuth() bool {
 	req, err := http.NewRequest(method, url, nil)
 
 	if err != nil {
-		fmt.Println(err)
 		return false
 	}
 	req.Header.Add("Authorization", "Bearer "+BearerToken)
 
 	res, err := client.Do(req)
 	if err != nil {
-		fmt.Println(err)
 		return false
 	}
 	defer res.Body.Close()
@@ -139,7 +137,7 @@ func RefreshTokenRoutine() {
 			RefreshTime = time.Now().Add(24 * time.Hour)
 			BearerToken = Auth()
 		}
-		time.Sleep(5 * time.Minute)
+		time.Sleep(15 * time.Second)
 	}
 }
 
@@ -216,21 +214,25 @@ func RefreshOrgs() {
 
 func RefreshOrgsRoutine() {
 	for {
-		RefreshOrgs()
-		time.Sleep(15 * time.Second)
+		if pingAuth() {
+			RefreshOrgs()
+		}
+		time.Sleep(1 * time.Minute)
 	}
 }
 
 func Monitor() {
-	orgs := getOrgs()
-	wg := sync.WaitGroup{}
-	for _, org := range orgs {
-		org.RefreshUiPathToken()
-		wg.Add(1)
-		go orgMonitor(org, &wg)
+	if pingAuth() {
+		orgs := getOrgs()
+		wg := sync.WaitGroup{}
+		for _, org := range orgs {
+			org.RefreshUiPathToken()
+			wg.Add(1)
+			go orgMonitor(org, &wg)
+		}
+		wg.Wait()
+		LastTime = time.Now()
 	}
-	wg.Wait()
-	LastTime = time.Now()
 	time.Sleep(30 * time.Second)
 }
 
@@ -253,7 +255,9 @@ func orgMonitor(org *ORM.Organizacion, wg *sync.WaitGroup) {
 		// buscar el incidente más reciente, de tipo 1 para establecerlo como fecha base
 		for _, incident := range incidentsProcess {
 			if incident.Tipo == 1 {
-				JobLastTime[process.ID] = incident.UpdatedAt // Se establece la fecha base, desde la ultima vez que se atendió la alerta
+				if JobLastTime[process.ID].Before(incident.UpdatedAt) {
+					JobLastTime[process.ID] = incident.UpdatedAt // Se establece la fecha base, desde la ultima vez que se atendió la alerta
+				}
 				break
 			}
 		}
@@ -332,17 +336,17 @@ func orgFolderRoutine(subwg *sync.WaitGroup, org *ORM.Organizacion, folderid uin
 					}
 					switch {
 					case fatalCounter >= process.FatalTolerance:
-						Reason = log.Message
+						Reason = "[" + log.TimeStamp.Format("2006-01-02 15:04:05") + "] \n" + log.Message
 						Message = "Se ha superado el umbral de errores fatales en el proceso"
 						ReportIncident(process, Message, Reason)
 						needStop = true
 					case errorCounter >= process.ErrorTolerance:
-						Reason = log.Message
+						Reason = "[" + log.TimeStamp.Format("2006-01-02 15:04:05") + "] \n" + log.Message
 						Message = "Se ha superado el umbral de errores en el proceso"
 						ReportIncident(process, Message, Reason)
 						needStop = true
 					case warnCounter >= process.WarningTolerance:
-						Reason = log.Message
+						Reason = "[" + log.TimeStamp.Format("2006-01-02 15:04:05") + "] \n" + log.Message
 						Message = "Se ha superado el umbral de advertencias en el proceso"
 						ReportIncident(process, Message, Reason)
 						needStop = true
