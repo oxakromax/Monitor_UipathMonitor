@@ -87,7 +87,7 @@ func Auth() string {
 	return ""
 }
 
-func newIncident(incidente *ORM.IncidenteProceso) {
+func newIncident(incidente *ORM.TicketsProceso) {
 	// POST /monitor/:id/newIncident (id = id del proceso)
 	url := APIUrl + "/monitor/" + strconv.FormatUint(uint64(incidente.ProcesoID), 10) + "/newIncident"
 	method := "POST"
@@ -244,7 +244,7 @@ func orgMonitor(org *ORM.Organizacion, wg *sync.WaitGroup) {
 			continue
 		}
 		FoldersAndProcesses[process.Folderid] = append(FoldersAndProcesses[process.Folderid], process)
-		incidentsProcess := process.IncidentesProceso
+		incidentsProcess := process.TicketsProcesos
 		sort.Slice(incidentsProcess, func(i, j int) bool {
 			// Ordenamos los incidentes por fecha de creación, de más reciente a más antiguo
 			return incidentsProcess[i].CreatedAt.After(incidentsProcess[j].CreatedAt)
@@ -362,14 +362,14 @@ func orgFolderRoutine(subwg *sync.WaitGroup, org *ORM.Organizacion, folderid uin
 }
 
 func ReportIncident(process *ORM.Proceso, Message string, Reason string) {
-	Incident := &ORM.IncidenteProceso{
-		Proceso:   process,
-		ProcesoID: process.ID,
-		Tipo:      1,
-		Incidente: Message,
-		Estado:    1,
+	Incident := &ORM.TicketsProceso{
+		Proceso:     process,
+		ProcesoID:   process.ID,
+		Tipo:        1,
+		Descripcion: Message,
+		Estado:      1,
 	}
-	Detail := &ORM.IncidentesDetalle{
+	Detail := &ORM.TicketsDetalle{
 		Detalle: Reason,
 	}
 	Incident.Detalles = append(Incident.Detalles, Detail)

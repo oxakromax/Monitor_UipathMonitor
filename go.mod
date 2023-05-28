@@ -2,12 +2,10 @@ module monitoruipathmonitor
 
 go 1.19
 
-require (
-	github.com/oxakromax/Backend_UipathMonitor v0.0.0-20230520122223-da6ea4a47f54
-	golang.org/x/exp v0.0.0-20230519143937-03e91628a987
-)
+require github.com/oxakromax/Backend_UipathMonitor v0.0.0-20230528101928-f5d322397977
 
 require (
+	github.com/google/go-cmp v0.5.8 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
