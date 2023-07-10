@@ -127,6 +127,30 @@ func newIncident(incidente *ORM.TicketsProceso) {
 	}
 }
 
+func JobKeyException(JobKey string) {
+	// PUT /monitor/UpdateExceptionJob
+	// Query: JobKey
+	url := APIUrl + "/monitor/UpdateExceptionJob?JobKey=" + JobKey
+	method := "PUT"
+
+	client := &http.Client{}
+	req, err := http.NewRequest(method, url, nil)
+
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	req.Header.Add("Authorization", "Bearer "+BearerToken)
+	req.Header.Add("Content-Type", "application/json")
+
+	res, err := client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer res.Body.Close()
+}
+
 func RefreshTokenRoutine() {
 	RefreshTime := time.Now().Add(24 * time.Hour)
 	for {
@@ -212,6 +236,40 @@ func RefreshOrgs() {
 	}
 }
 
+func RefreshJobHistory(){
+	// PATCH /monitor/PatchJobHistory
+	url := APIUrl + "/monitor/PatchJobHistory"
+	method := "PATCH"
+
+	client := &http.Client{}
+	req, err := http.NewRequest(method, url, nil)
+
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	req.Header.Add("Authorization", "Bearer "+BearerToken)
+
+	res, err := client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer res.Body.Close()
+
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	if res.StatusCode != 200 {
+		fmt.Println("Error: ", res.StatusCode)
+		fmt.Println(string(body))
+		return
+	}
+}
+
 func RefreshOrgsRoutine() {
 	for {
 		if pingAuth() {
@@ -223,6 +281,7 @@ func RefreshOrgsRoutine() {
 
 func Monitor() {
 	if pingAuth() {
+		RefreshJobHistory()
 		orgs := getOrgs()
 		wg := sync.WaitGroup{}
 		for _, org := range orgs {
@@ -280,7 +339,7 @@ func orgFolderRoutine(subwg *sync.WaitGroup, org *ORM.Organizacion, folderid uin
 	sort.Slice(JobsResponse.Value, func(i, j int) bool {
 		// Ordenamos los jobs por fecha de creación, de más reciente a más antiguo
 		return JobsResponse.Value[i].CreationTime.After(JobsResponse.Value[j].CreationTime)
-	})
+	}) 
 	for _, job := range JobsResponse.Value {
 		var jobProcess ORM.Proceso
 		for _, process := range processes {
@@ -292,13 +351,22 @@ func orgFolderRoutine(subwg *sync.WaitGroup, org *ORM.Organizacion, folderid uin
 		if !jobProcess.ActiveMonitoring {
 			continue
 		}
+
+		if job.State == "Pending" {
+			JobLastTime[jobProcess.ID] = job.CreationTime
+			Now := time.Now()
+			// if job is pending for more than 30 minutes, we report it
+			if Now.Sub(job.CreationTime).Minutes() > 30 {
+				ReportIncident(&jobProcess, "Ejecución pendiente no realizada", "El proceso está pendiente de ejecución desde hace más de 30 minutos")
+			}
+			continue
+		}
+
 		// Check if start or end time of job is newer than last time
-		if job.StartTime.Before(JobLastTime[jobProcess.ID]) || job.EndTime.Before(JobLastTime[jobProcess.ID]) {
+		if job.StartTime.Before(JobLastTime[jobProcess.ID]) && job.EndTime.Before(JobLastTime[jobProcess.ID]) {
 			continue
 		}
 		switch job.State {
-		case "Pending":
-			JobLastTime[jobProcess.ID] = job.CreationTime
 		case "Running", "Successful":
 			JobLastTime[jobProcess.ID] = job.StartTime // we want to check if everything is ok until the job is finished
 		case "Stopped":
@@ -350,6 +418,9 @@ func orgFolderRoutine(subwg *sync.WaitGroup, org *ORM.Organizacion, folderid uin
 						Message = "Se ha superado el umbral de advertencias en el proceso"
 						ReportIncident(process, Message, Reason)
 						needStop = true
+					}
+					if needStop {
+						JobKeyException(log.JobKey)
 					}
 				}
 			}
