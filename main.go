@@ -275,9 +275,7 @@ func RefreshJobHistory() {
 
 func refreshOrgsRoutine() {
 	for {
-		if pingAuth() {
-			RefreshOrgs()
-		}
+		RefreshOrgs()
 		time.Sleep(1 * time.Minute)
 	}
 }
