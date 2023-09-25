@@ -3,13 +3,16 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"github.com/joho/godotenv"
+	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/oxakromax/Backend_UipathMonitor/ORM"
@@ -18,8 +21,7 @@ import (
 
 var (
 	BearerToken string
-	APIUrl      = os.Getenv("API_URL")
-	LastTime    = time.Now()
+	APIUrl      = ""
 	JobLastTime = make(map[uint]time.Time)
 )
 
@@ -44,6 +46,7 @@ func pingAuth() bool {
 }
 
 func Auth() string {
+	APIUrl = os.Getenv("API_URL")
 	url := APIUrl + "/auth"
 	method := "POST"
 	payload := strings.NewReader("email=" + os.Getenv("MONITOR_USER") + "&password=" + os.Getenv("MONITOR_PASS"))
@@ -64,7 +67,7 @@ func Auth() string {
 	}
 	defer res.Body.Close()
 
-	body, err := ioutil.ReadAll(res.Body)
+	body, err := io.ReadAll(res.Body)
 	if err != nil {
 		fmt.Println(err)
 		return ""
@@ -89,7 +92,7 @@ func Auth() string {
 
 func newIncident(incidente *ORM.TicketsProceso) {
 	// POST /monitor/:id/newIncident (id = id del proceso)
-	url := APIUrl + "/monitor/" + strconv.FormatUint(uint64(incidente.ProcesoID), 10) + "/newIncident"
+	url := APIUrl + "/monitor/" + strconv.FormatUint(uint64(incidente.ProcesoID), 10) + "/newTicket"
 	method := "POST"
 	body, err := json.Marshal(incidente)
 	if err != nil {
@@ -114,7 +117,7 @@ func newIncident(incidente *ORM.TicketsProceso) {
 	}
 	defer res.Body.Close()
 
-	body, err = ioutil.ReadAll(res.Body)
+	body, err = io.ReadAll(res.Body)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -151,7 +154,7 @@ func JobKeyException(JobKey string) {
 	defer res.Body.Close()
 }
 
-func RefreshTokenRoutine() {
+func refreshTokenRoutine() {
 	RefreshTime := time.Now().Add(24 * time.Hour)
 	for {
 		if !pingAuth() {
@@ -185,7 +188,7 @@ func getOrgs() []*ORM.Organizacion {
 	}
 	defer res.Body.Close()
 
-	body, err := ioutil.ReadAll(res.Body)
+	body, err := io.ReadAll(res.Body)
 	if err != nil {
 		fmt.Println(err)
 		return nil
@@ -223,7 +226,7 @@ func RefreshOrgs() {
 	}
 	defer res.Body.Close()
 
-	body, err := ioutil.ReadAll(res.Body)
+	body, err := io.ReadAll(res.Body)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -236,7 +239,7 @@ func RefreshOrgs() {
 	}
 }
 
-func RefreshJobHistory(){
+func RefreshJobHistory() {
 	// PATCH /monitor/PatchJobHistory
 	url := APIUrl + "/monitor/PatchJobHistory"
 	method := "PATCH"
@@ -257,7 +260,7 @@ func RefreshJobHistory(){
 	}
 	defer res.Body.Close()
 
-	body, err := ioutil.ReadAll(res.Body)
+	body, err := io.ReadAll(res.Body)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -270,7 +273,7 @@ func RefreshJobHistory(){
 	}
 }
 
-func RefreshOrgsRoutine() {
+func refreshOrgsRoutine() {
 	for {
 		if pingAuth() {
 			RefreshOrgs()
@@ -282,15 +285,12 @@ func RefreshOrgsRoutine() {
 func Monitor() {
 	if pingAuth() {
 		RefreshJobHistory()
-		orgs := getOrgs()
-		wg := sync.WaitGroup{}
-		for _, org := range orgs {
-			org.RefreshUiPathToken()
+		wg := new(sync.WaitGroup)
+		for _, org := range getOrgs() {
 			wg.Add(1)
-			go orgMonitor(org, &wg)
+			go orgMonitor(org, wg)
 		}
 		wg.Wait()
-		LastTime = time.Now()
 	}
 	time.Sleep(30 * time.Second)
 }
@@ -313,7 +313,7 @@ func orgMonitor(org *ORM.Organizacion, wg *sync.WaitGroup) {
 		}
 		// buscar el incidente más reciente, de tipo 1 para establecerlo como fecha base
 		for _, incident := range incidentsProcess {
-			if incident.Tipo == 1 {
+			if incident.Tipo.ID == 1 { // incidente
 				if JobLastTime[process.ID].Before(incident.UpdatedAt) {
 					JobLastTime[process.ID] = incident.UpdatedAt // Se establece la fecha base, desde la ultima vez que se atendió la alerta
 				}
@@ -322,15 +322,15 @@ func orgMonitor(org *ORM.Organizacion, wg *sync.WaitGroup) {
 		}
 
 	}
-	subwg := sync.WaitGroup{}
+	subwg := new(sync.WaitGroup)
 	for folderid, processes := range FoldersAndProcesses {
-		go orgFolderRoutine(&subwg, org, folderid, processes)
+		subwg.Add(1)
+		go orgFolderRoutine(subwg, org, folderid, processes)
 	}
 	subwg.Wait()
 }
 
 func orgFolderRoutine(subwg *sync.WaitGroup, org *ORM.Organizacion, folderid uint, processes []*ORM.Proceso) {
-	subwg.Add(1)
 	defer subwg.Done()
 	JobsResponse := new(UipathAPI.JobsResponse)
 	org.GetFromApi(JobsResponse, int(folderid))
@@ -339,7 +339,9 @@ func orgFolderRoutine(subwg *sync.WaitGroup, org *ORM.Organizacion, folderid uin
 	sort.Slice(JobsResponse.Value, func(i, j int) bool {
 		// Ordenamos los jobs por fecha de creación, de más reciente a más antiguo
 		return JobsResponse.Value[i].CreationTime.After(JobsResponse.Value[j].CreationTime)
-	}) 
+	})
+
+	ProcessJobKeyMap := make(map[uint]UipathAPI.JobsValue)
 	for _, job := range JobsResponse.Value {
 		var jobProcess ORM.Proceso
 		for _, process := range processes {
@@ -356,8 +358,8 @@ func orgFolderRoutine(subwg *sync.WaitGroup, org *ORM.Organizacion, folderid uin
 			JobLastTime[jobProcess.ID] = job.CreationTime
 			Now := time.Now()
 			// if job is pending for more than 30 minutes, we report it
-			if Now.Sub(job.CreationTime).Minutes() > 30 {
-				ReportIncident(&jobProcess, "Ejecución pendiente no realizada", "El proceso está pendiente de ejecución desde hace más de 30 minutos")
+			if Now.Sub(job.CreationTime).Minutes() > float64(jobProcess.MaxQueueTime) {
+				go ReportIncident(&jobProcess, "Ejecución pendiente no realizada", "El proceso está pendiente de ejecución desde hace más de "+strconv.Itoa(jobProcess.MaxQueueTime)+" minutos")
 			}
 			continue
 		}
@@ -366,17 +368,19 @@ func orgFolderRoutine(subwg *sync.WaitGroup, org *ORM.Organizacion, folderid uin
 		if job.StartTime.Before(JobLastTime[jobProcess.ID]) && job.EndTime.Before(JobLastTime[jobProcess.ID]) {
 			continue
 		}
+
 		switch job.State {
 		case "Running", "Successful":
 			JobLastTime[jobProcess.ID] = job.StartTime // we want to check if everything is ok until the job is finished
 		case "Stopped":
 			JobLastTime[jobProcess.ID] = job.EndTime.Add(1 * time.Second) // manually stopped, so we don't want to report it
 		case "Faulted", "Error":
-			ReportIncident(&jobProcess, "Error de ejecución", job.Info)
+			go ReportIncident(&jobProcess, "Error de ejecución", *job.Info)
 			JobLastTime[jobProcess.ID] = job.EndTime.Add(1 * time.Second) // it's already reported, so we don't want to report it again
 		default:
 			JobLastTime[jobProcess.ID] = time.Now()
 		}
+		ProcessJobKeyMap[jobProcess.ID] = job
 	}
 	for _, process := range processes {
 		warnCounter := 0
@@ -388,6 +392,7 @@ func orgFolderRoutine(subwg *sync.WaitGroup, org *ORM.Organizacion, folderid uin
 		if !process.ActiveMonitoring {
 			continue
 		}
+		LastTimeLog := time.Time{}
 		for _, log := range LogResponse.Value {
 			if needStop {
 				break
@@ -406,27 +411,49 @@ func orgFolderRoutine(subwg *sync.WaitGroup, org *ORM.Organizacion, folderid uin
 					case fatalCounter >= process.FatalTolerance:
 						Reason = "[" + log.TimeStamp.Format("2006-01-02 15:04:05") + "] \n" + log.Message
 						Message = "Se ha superado el umbral de errores fatales en el proceso"
-						ReportIncident(process, Message, Reason)
+						go ReportIncident(process, Message, Reason)
 						needStop = true
 					case errorCounter >= process.ErrorTolerance:
 						Reason = "[" + log.TimeStamp.Format("2006-01-02 15:04:05") + "] \n" + log.Message
 						Message = "Se ha superado el umbral de errores en el proceso"
-						ReportIncident(process, Message, Reason)
+						go ReportIncident(process, Message, Reason)
 						needStop = true
 					case warnCounter >= process.WarningTolerance:
 						Reason = "[" + log.TimeStamp.Format("2006-01-02 15:04:05") + "] \n" + log.Message
 						Message = "Se ha superado el umbral de advertencias en el proceso"
-						ReportIncident(process, Message, Reason)
+						go ReportIncident(process, Message, Reason)
 						needStop = true
 					}
 					if needStop {
-						JobKeyException(log.JobKey)
+						go JobKeyException(log.JobKey)
 					}
+				}
+				if LastTimeLog.Before(log.TimeStamp) {
+					LastTimeLog = log.TimeStamp
 				}
 			}
 		}
 		if needStop {
 			continue // Go to next process
+		}
+		MaxTimeForLog := process.MaxQueueTime
+		if MaxTimeForLog == 0 {
+			continue
+		}
+		Now := time.Now()
+		if Now.Sub(LastTimeLog).Minutes() > float64(MaxTimeForLog) {
+			if val, ok := ProcessJobKeyMap[process.ID]; ok {
+				if val.State != "Running" {
+					continue
+				}
+				go JobKeyException(val.Key)
+			} else {
+				continue // Doesn't have a job running
+			}
+			TimeDifference := int(Now.Sub(LastTimeLog).Minutes())
+			Reason = "El proceso no ha registrado logs en los últimos " + strconv.Itoa(TimeDifference) + " minutos"
+			Message = "El proceso no ha registrado logs en los últimos " + strconv.Itoa(TimeDifference) + " minutos"
+			go ReportIncident(process, Message, Reason)
 		}
 
 	}
@@ -436,9 +463,8 @@ func ReportIncident(process *ORM.Proceso, Message string, Reason string) {
 	Incident := &ORM.TicketsProceso{
 		Proceso:     process,
 		ProcesoID:   process.ID,
-		Tipo:        1,
+		TipoID:      1,
 		Descripcion: Message,
-		Estado:      1,
 	}
 	Detail := &ORM.TicketsDetalle{
 		Detalle: Reason,
@@ -449,10 +475,42 @@ func ReportIncident(process *ORM.Proceso, Message string, Reason string) {
 
 func main() {
 	println("Starting...")
-	BearerToken = Auth()
-	go RefreshTokenRoutine()
-	go RefreshOrgsRoutine()
+	previousToClose()
+	envVars()
+	if !initializeConnection() {
+		return
+	}
+	go refreshTokenRoutine()
+	go refreshOrgsRoutine()
+	fmt.Println("Running...")
 	for {
 		Monitor()
 	}
+}
+
+func initializeConnection() bool {
+	BearerToken = Auth()
+	if BearerToken == "" {
+		fmt.Println("Error getting token")
+		return false
+	}
+	return true
+}
+
+func envVars() {
+	var err = godotenv.Load()
+	if err != nil {
+		fmt.Println("Error loading .env file, please be sure ENV variables are set")
+	}
+}
+
+func previousToClose() {
+	// Captura señales de terminación.
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		fmt.Println("Closing...")
+		os.Exit(0)
+	}()
 }
