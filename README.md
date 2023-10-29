@@ -25,7 +25,7 @@ Este servicio de monitoreo es una pieza clave en nuestra arquitectura de microse
    MONITOR_USER=monitor@localhost.com
    ```
 
-   **Importante**: Asegúrate de usar la misma `DB_KEY` Además las credenciales `MONITOR_*` que configuraste en el servidor API REST y de apuntar correctamente la `API_URL` al servidor. 
+   **Importante**: Asegúrate de usar la misma `DB_KEY`, además las credenciales `MONITOR_*` que configuraste en el servidor y de apuntar correctamente la `API_URL`. 
 
 ## Instalación y Ejecución
 
