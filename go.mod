@@ -1,4 +1,4 @@
-module monitoruipathmonitor
+module github.com/oxakromax/Monitor_UipathMonitor
 
 go 1.21
 
